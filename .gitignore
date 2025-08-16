@@ -1,0 +1,3 @@
+BACKUP_app_copy_IGNORE.py
+venv_mpg/
+faiss_index/
