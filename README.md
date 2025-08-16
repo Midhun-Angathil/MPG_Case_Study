@@ -13,7 +13,7 @@ Setup steps:
     - Open Anaconda Prompt
     - Navigate to the project folder path (cd /path/to/the/folder)
     - type 'code .' (without quotes) and hit enter
-    - Open a new terminal using shortcut (ctrl+shift+`) or by clicking the 3-dotted-icon on the file menu at the top-right-corner and clicking on 'terminal' -> 'New terminal'.
+    - Open a new terminal using shortcut (ctrl+shift+`) or by clicking the 3-dotted-icon on the file menu at the top-left-corner and clicking on 'terminal' -> 'New terminal'.
     - type 'conda create -p venv_mpg python=='3.10' -y' (without quotes) where venv_mpg is the name of your virtual environment
     - type 'conda activate venv_mpg/' (without quotes) where venv_mpg is the name of your virtual environment. 
     - Run the command - 'pip install -r requirements.txt' (without quotes). If the installation does not work, make sure you are using cmd prompt in the VSCode terminal by closing any powershell icons you see on the right-hand-side of the VSCode terminal window.

@@ -3,23 +3,8 @@
 # UI framework
 import streamlit as st 
 
-# To build a chain that combines documents
-from langchain.chains.combine_documents import create_stuff_documents_chain 
-
-# To use chat history & to link FAISS (retriever) with create_stuff_documents_chain:
-from langchain.chains import create_history_aware_retriever, create_retrieval_chain 
-
 # Vector Embedding and Vector Store
 from langchain.vectorstores import FAISS
-
-# To store and manage messages exchanged in the conversation
-from langchain_community.chat_message_histories import ChatMessageHistory
-
-# Defines an interface for storing and retrieving chat messages
-from langchain_core.chat_history import BaseChatMessageHistory
-
-# To build struc./reusable prompts & to dynamically inj chat hist into a prompt temeplate
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 # To manage the conversation history across multiple interactions (any runnable)
 from langchain_core.runnables.history import RunnableWithMessageHistory
@@ -28,31 +13,18 @@ from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain.chat_models import ChatOpenAI
 from langchain.embeddings import OpenAIEmbeddings
 
-# For Breaking docs to smaller, semantically meaningful chunks
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-
-# For loading PDF files
-from langchain_community.document_loaders import PyPDFLoader
-
 # Importing os for system operations
 import os
 
 # Importing psutil to measure memory usage
-import psutil
+import psutil 
 
-# For token counting
-import tiktoken 
-
-#for estimating the size of a directory in MB
-import os
-
-def get_dir_size_mb(path):
-    total = 0
-    for dirpath, dirnames, filenames in os.walk(path):
-        for f in filenames:
-            fp = os.path.join(dirpath, f)
-            total += os.path.getsize(fp)
-    return round(total / (1024 * 1024), 2)  # MB
+# Importing custom modules from this repository
+from rag.pdf_loader import load_and_split_pdfs # PDF loading and chunking
+from rag.faiss_utils import get_dir_size_mb # disk/memory utilities
+from rag.openai_utils import estimate_cost # Cost estimation, balance, and LLM helpers
+from rag.chat_history import get_session_history # Chat history/session management
+from rag.rag_chain import build_rag_chain # RAG chain and prompt setup
 
 
 # Set up Steamlit
@@ -74,16 +46,6 @@ st.session_state.openai_balance = st.number_input(
     step=0.01,
     help="Check your balance at https://platform.openai.com/account/billing"
 )
-
-# Helper: Estimate token count and cost for gpt-3.5-turbo-16k
-def estimate_cost(prompt, model="gpt-3.5-turbo-16k"):
-    input_token_price = 0.005 / 1000
-    output_token_price = 0.015 / 1000
-    encoding = tiktoken.encoding_for_model(model)
-    input_tokens = len(encoding.encode(prompt))
-    output_tokens = 75  # 3 sentences, concise
-    est_cost = input_tokens * input_token_price + output_tokens * output_token_price
-    return input_tokens, output_tokens, round(est_cost, 4)
 
 # Helper: Measure memory usage
 def get_memory_usage_mb():
@@ -130,28 +92,7 @@ else:
 
     # Process the uploaded PDF files
     if uploaded_files:
-        documents = []
-        for uploaded_file in uploaded_files:
-            # Construct a temporary filename on disk by prefixing 
-            # temp_ to the original filename (uploaded_file.name).
-            temppdf=f"./temp_{uploaded_file.name}"
-            # Use 'wb' mode to write non-text data such as PDFs, images, etc.
-            with open(temppdf, "wb") as f:
-                # Write raw PDF bytes to temp_df   
-                f.write(uploaded_file.getvalue())
-                # store original file name for later use
-                file_name = uploaded_file.name
-
-            # Load the PDF file using PyPDFLoader.
-            loader = PyPDFLoader(temppdf)
-            # Defining docs to hold a list of Document objects
-            docs = loader.load()
-            # Appending as list items to the 'documents' list that was initialised earlier.
-            documents.extend(docs)
-
-        # Split the documents into smaller chunks using RecursiveCharacterTextSplitter
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=5000, chunk_overlap=500)
-        splits = text_splitter.split_documents(documents)
+        splits = load_and_split_pdfs(uploaded_files)  # Function defined in rag/pdf_loader.py
 
         # Estimate memory needed for FAISS
         est_faiss_mem = estimate_faiss_memory(len(splits))
@@ -184,21 +125,6 @@ else:
             "just reformulate it if needed and otherwise return it as is." #(contd.) - task, not an answering task.
         )    
 
-        # This snippet builds a reusable prompt template for a chat model by stitching together three args in order
-        contexualize_q_prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", contexualize_q_system_prompt), # sys msg that carries rewrite-the-question instructions
-                MessagesPlaceholder("chat_history"), # placeholder that will be filled with the prior conversation history at runtime
-                ("human", "{input}"), # a {question} variable supplied during runtime of the chain
-
-            ]
-        )
-
-        # Takes the raw user question & chat history, Uses the LLM plus the 3rd arg (prompt) to rewrite the question into a standalone form,
-        # and feeds that rewritten question into the original retriever to fetch relevant documents.
-        history_aware_retriever = create_history_aware_retriever(llm, retriever, contexualize_q_prompt)
-
-
         # Answer Question:
         system_prompt = (
             "You are an assistant for question-answering tasks. " # This opening instruction establishes the LLM’s role and the high-level objective—to act as a QA assistant.
@@ -210,31 +136,13 @@ else:
             "{context}" # A placeholder that LangChain will replace at runtime with the actual retrieved document snippets relevant to the user’s query.
         )
 
-        qa_prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", system_prompt),  # System message with instructions
-                MessagesPlaceholder("chat_history"),  # Placeholder for chat history
-                ("human", "{input}"),  # Variable for the user's question
-            ]
-        )
-
-        #builds the “stuff” chain for document-based QA
-        question_answering_chain = create_stuff_documents_chain(
+        # Import from module rag/rag_chain.py
+        rag_chain = build_rag_chain(
             llm=llm,  # The LLM to use for generating answers
-            prompt=qa_prompt)  # The prompt template that structures the input to the LLM
-
-        # A composite pipeline that first retrieves context using our retriever and then 
-        # invokes a QA chain to generate a grounded answer
-        rag_chain = create_retrieval_chain(
-            retriever=history_aware_retriever,  # The retriever that fetches relevant documents based on the user’s question and chat history
-            combine_docs_chain=question_answering_chain,  # The chain that answers questions based on retrieved documents
+            retriever=retriever,  # The retriever that fetches relevant documents based on the user’s question and chat history
+            system_prompt=system_prompt,  # System message with instructions
+            contextualize_q_system_prompt=contexualize_q_system_prompt  # System message for rewriting the question
         )
-
-        # Function to return base chat message history based on session ID
-        def get_session_history(session_id: str) -> BaseChatMessageHistory:
-            if session_id not in st.session_state.store: #Checks for id in store defined in line 75
-                st.session_state.store[session_id] = ChatMessageHistory() #stores hist by mapping it to the corresponding ID 
-            return st.session_state.store[session_id]
 
         conversational_rag_chain = RunnableWithMessageHistory(
             rag_chain,  # The RAG chain that combines retrieval and QA
